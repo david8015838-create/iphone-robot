@@ -31,6 +31,7 @@ export function useRobot() {
   const [isThinking,    setIsThinking]    = useState(false)
   const [autoListen,    setAutoListen]    = useState(false)
   const [wakeMode,      setWakeMode]      = useState(false)
+  const [needsGesture,  setNeedsGesture]  = useState(false)
   const [pendingAction, setPendingAction] = useState<{
     name: ActionName; args: Record<string, string>; label: string
   } | null>(null)
@@ -38,7 +39,8 @@ export function useRobot() {
 
   const rotator     = useRef(getKeyRotator())
   const emotionEng  = useRef<EmotionEngine | null>(null)
-  const autoRef     = useRef(false)   // mirror of autoListen for callbacks
+  const autoRef            = useRef(false)
+  const onWakeDetectedRef  = useRef<((extra: string) => void) | null>(null)
 
   const {
     isListening, isSpeaking, mouthOpenness,
@@ -50,7 +52,26 @@ export function useRobot() {
   useEffect(() => {
     emotionEng.current = new EmotionEngine((e) => setEmotion(e))
     setKeys(rotator.current.getAll())
-    return () => { emotionEng.current?.destroy(); rotator.current.destroy() }
+
+    // Auto-start wake detection — works immediately on PWA, needs one gesture on browser
+    const timer = setTimeout(() => {
+      setWakeMode(true)
+      startWakeMode(
+        (extra) => onWakeDetectedRef.current?.(extra),
+        () => {
+          // Needs gesture — show hint, user taps anywhere to activate
+          setNeedsGesture(true)
+          setWakeMode(false)
+        }
+      )
+    }, 800)
+
+    return () => {
+      clearTimeout(timer)
+      emotionEng.current?.destroy()
+      rotator.current.destroy()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Keep ref in sync so callbacks always see latest value
@@ -206,7 +227,6 @@ export function useRobot() {
 
   const cancelAction = useCallback(() => { setPendingAction(null); speak('好，取消了', 'zh-TW') }, [speak])
 
-  // Called when wake word is detected — stop wake loop, start active listen
   const onWakeDetected = useCallback((extra: string) => {
     stopWakeMode()
     emotionEng.current?.setEmotion('listening')
@@ -222,6 +242,9 @@ export function useRobot() {
       })
     }
   }, [stopWakeMode, startListening])
+
+  // Keep ref current so the auto-start closure can call it
+  useEffect(() => { onWakeDetectedRef.current = onWakeDetected }, [onWakeDetected])
 
   // ─── Mic button ──────────────────────────────────────────────────
   const handleMicPress = useCallback(() => {
@@ -266,10 +289,21 @@ export function useRobot() {
 
   const handleMicRelease = useCallback(() => {}, [])
 
+  // Called when user taps the screen during "needs gesture" state
+  const activateByGesture = useCallback(() => {
+    setNeedsGesture(false)
+    setWakeMode(true)
+    setAutoListen(true)
+    startWakeMode(
+      (extra) => onWakeDetectedRef.current?.(extra),
+      () => { setNeedsGesture(true); setWakeMode(false) }
+    )
+  }, [startWakeMode])
+
   return {
     emotion, messages, keys, isThinking, isListening, isSpeaking,
-    mouthOpenness, showHistory, pendingAction, autoListen, wakeMode,
+    mouthOpenness, showHistory, pendingAction, autoListen, wakeMode, needsGesture,
     setShowHistory, sendMessage, addKey, removeKey, resetKey,
-    handleMicPress, handleMicRelease, confirmAction, cancelAction,
+    handleMicPress, handleMicRelease, confirmAction, cancelAction, activateByGesture,
   }
 }

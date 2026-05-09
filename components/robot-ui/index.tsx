@@ -19,7 +19,7 @@ export default function RobotUI() {
     mouthOpenness,
     pendingAction,
     showHistory,
-    autoListen, wakeMode,
+    autoListen, wakeMode, needsGesture,
     setShowHistory,
     sendMessage,
     addKey,
@@ -28,6 +28,7 @@ export default function RobotUI() {
     handleMicPress,
     confirmAction,
     cancelAction,
+    activateByGesture,
   } = useRobot()
 
   const { videoRef, isCameraOn, toggleCamera, captureFrame } = useCamera()
@@ -61,14 +62,50 @@ export default function RobotUI() {
       className="relative w-full bg-[#0a0a0a] overflow-hidden"
       style={{ height: '100dvh' }}
     >
-      {/* ══ Full-screen face (tap to toggle menu) ══ */}
+      {/* ══ Full-screen face ══ */}
       <div
         className="w-full h-full"
-        onClick={() => !isListening && setIsMenuOpen((v) => !v)}
+        onClick={() => {
+          if (needsGesture) { activateByGesture(); return }
+          if (!isListening) setIsMenuOpen((v) => !v)
+        }}
         style={{ cursor: 'pointer', touchAction: 'manipulation' }}
       >
         <RobotFace emotion={emotionForSpeech} mouthOpenness={mouthOpenness} />
       </div>
+
+      {/* ══ One-time gesture hint (only shown if browser blocks auto-start) ══ */}
+      <AnimatePresence>
+        {needsGesture && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none"
+          >
+            <motion.div
+              animate={{ scale: [1, 1.04, 1] }}
+              transition={{ repeat: Infinity, duration: 2.5 }}
+              style={{
+                textAlign: 'center',
+                padding: '24px 32px',
+                borderRadius: 20,
+                background: 'rgba(0,0,0,0.7)',
+                backdropFilter: 'blur(12px)',
+                border: '1px solid rgba(255,255,255,0.1)',
+              }}
+            >
+              <p style={{ fontSize: 32, marginBottom: 8 }}>👆</p>
+              <p style={{ color: 'rgba(255,255,255,0.9)', fontSize: 16, fontWeight: 600 }}>
+                點一下畫面啟動語音
+              </p>
+              <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12, marginTop: 6 }}>
+                之後說「yo bro」就能喚醒
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ══ Key status dot — top-left ══ */}
       <div className="absolute top-3 left-4 z-10 flex items-center gap-2 pointer-events-none">

@@ -137,7 +137,7 @@ export function useSpeech() {
   }, [])
 
   // ─── Wake-word detection loop ────────────────────────────────────
-  const startWakeMode = useCallback((onWake: (extra: string) => void) => {
+  const startWakeMode = useCallback((onWake: (extra: string) => void, onNeedsGesture?: () => void) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any
     const API = w.SpeechRecognition || w.webkitSpeechRecognition
@@ -150,14 +150,13 @@ export function useSpeech() {
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const rec: any = new API()
-      rec.lang = 'zh-TW'          // zh-TW recognises "yo bro" well enough
+      rec.lang = 'zh-TW'
       rec.continuous = false
       rec.interimResults = false
-      rec.maxAlternatives = 3     // more alternatives → better wake word hit rate
+      rec.maxAlternatives = 3
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       rec.onresult = (e: any) => {
-        // Check all alternatives for wake word
         for (let i = 0; i < e.results.length; i++) {
           for (let j = 0; j < e.results[i].length; j++) {
             const text: string = e.results[i][j].transcript ?? ''
@@ -171,18 +170,22 @@ export function useSpeech() {
       }
 
       rec.onend = () => {
-        if (wakeModeRef.current) setTimeout(loop, 250)
+        if (wakeModeRef.current) setTimeout(loop, 200)
       }
 
       rec.onerror = (e: { error: string }) => {
-        // 'no-speech' and 'aborted' are expected — keep looping
-        if (wakeModeRef.current && e.error !== 'not-allowed') {
+        if (!wakeModeRef.current) return
+        if (e.error === 'not-allowed') {
+          // Microphone permission denied or needs gesture — notify caller
+          onNeedsGesture?.()
+        } else {
+          // no-speech / aborted / network — keep looping
           setTimeout(loop, 500)
         }
       }
 
       wakeRecRef.current = rec
-      try { rec.start() } catch { /* ignore */ }
+      try { rec.start() } catch { onNeedsGesture?.() }
     }
 
     loop()
