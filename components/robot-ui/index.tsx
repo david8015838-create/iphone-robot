@@ -6,6 +6,7 @@ import RobotFace from '@/components/robot-face'
 import KeyManager from '@/components/settings/KeyManager'
 import { useRobot } from '@/hooks/useRobot'
 import { useCamera } from '@/hooks/useCamera'
+import { useAudioUnlock } from '@/hooks/useAudioUnlock'
 
 export default function RobotUI() {
   const {
@@ -30,6 +31,7 @@ export default function RobotUI() {
   } = useRobot()
 
   const { videoRef, isCameraOn, toggleCamera, captureFrame } = useCamera()
+  useAudioUnlock()  // unlock iOS TTS on first tap
 
   const [isMenuOpen,     setIsMenuOpen]     = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)

@@ -83,38 +83,68 @@ export function useSpeech() {
     if (typeof window === 'undefined') return
     window.speechSynthesis.cancel()
 
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = 'zh-TW'
-    utterance.rate = 1.0
-    utterance.pitch = 1.1
-    utterance.volume = 1.0
+    const doSpeak = () => {
+      const utterance = new SpeechSynthesisUtterance(text)
+      utterance.lang = 'zh-TW'
+      utterance.rate = 1.0
+      utterance.pitch = 1.1
+      utterance.volume = 1.0
 
-    // Prefer a Chinese voice if available
+      // Pick Chinese voice if available
+      const voices = window.speechSynthesis.getVoices()
+      const zhVoice = voices.find((v) => v.lang.startsWith('zh'))
+      if (zhVoice) utterance.voice = zhVoice
+
+      utterance.onstart = () => {
+        setIsSpeaking(true)
+        mouthTimerRef.current = setInterval(() => {
+          setMouthOpenness(Math.random() * 0.8 + 0.2)
+        }, 80)
+      }
+
+      const cleanup = () => {
+        setIsSpeaking(false)
+        setMouthOpenness(0)
+        if (mouthTimerRef.current) clearInterval(mouthTimerRef.current)
+      }
+
+      utterance.onend   = () => { cleanup(); onEnd?.() }
+      utterance.onerror = () => { cleanup() }
+
+      window.speechSynthesis.speak(utterance)
+
+      // iOS workaround: speechSynthesis can stall silently — nudge it
+      const nudge = setInterval(() => {
+        if (!window.speechSynthesis.speaking) {
+          clearInterval(nudge)
+          return
+        }
+        window.speechSynthesis.pause()
+        window.speechSynthesis.resume()
+      }, 10_000)
+
+      utterance.onend = () => {
+        clearInterval(nudge)
+        cleanup()
+        onEnd?.()
+      }
+    }
+
+    // iOS: voices list may be empty on first call — wait for it
     const voices = window.speechSynthesis.getVoices()
-    const zhVoice = voices.find((v) => v.lang.startsWith('zh'))
-    if (zhVoice) utterance.voice = zhVoice
-
-    utterance.onstart = () => {
-      setIsSpeaking(true)
-      mouthTimerRef.current = setInterval(() => {
-        setMouthOpenness(Math.random() * 0.8 + 0.2)
-      }, 80)
+    if (voices.length > 0) {
+      doSpeak()
+    } else {
+      window.speechSynthesis.onvoiceschanged = () => {
+        window.speechSynthesis.onvoiceschanged = null
+        doSpeak()
+      }
+      // Fallback: just speak without a specific voice after short delay
+      setTimeout(() => {
+        if (!isSpeaking) doSpeak()
+      }, 500)
     }
-
-    const cleanup = () => {
-      setIsSpeaking(false)
-      setMouthOpenness(0)
-      if (mouthTimerRef.current) clearInterval(mouthTimerRef.current)
-    }
-
-    utterance.onend  = () => { cleanup(); onEnd?.() }
-    utterance.onerror = () => { cleanup() }
-
-    // iOS requires speechSynthesis to be triggered inside a user gesture.
-    // We call speak() after API response, which may be async — but iOS 16+
-    // generally allows it as long as the page has been interacted with once.
-    window.speechSynthesis.speak(utterance)
-  }, [])
+  }, [isSpeaking])
 
   const stopSpeaking = useCallback(() => {
     window.speechSynthesis.cancel()
