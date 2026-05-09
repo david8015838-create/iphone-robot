@@ -19,13 +19,13 @@ export default function RobotUI() {
     mouthOpenness,
     pendingAction,
     showHistory,
+    autoListen,
     setShowHistory,
     sendMessage,
     addKey,
     removeKey,
     resetKey,
     handleMicPress,
-    handleMicRelease,
     confirmAction,
     cancelAction,
   } = useRobot()
@@ -37,8 +37,6 @@ export default function RobotUI() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [showTextInput,  setShowTextInput]  = useState(false)
   const [inputText,      setInputText]      = useState('')
-  const micBusy = useRef(false)
-
   const emotionForSpeech = isSpeaking ? 'speaking' : isListening ? 'listening' : emotion
   const lastMsg          = messages[messages.length - 1]
   const readyCount       = keys.filter((k) => k.status === 'ready').length
@@ -54,16 +52,9 @@ export default function RobotUI() {
     await sendMessage(text, frame)
   }, [inputText, isCameraOn, captureFrame, sendMessage])
 
-  // ─── iOS-safe mic tap: call recognition.start() immediately in the gesture ───
   const handleMicTap = useCallback(() => {
-    if (micBusy.current) return
-    if (isListening) {
-      handleMicRelease()
-    } else {
-      // Call handleMicPress synchronously — no state update first
-      handleMicPress()
-    }
-  }, [isListening, handleMicPress, handleMicRelease])
+    handleMicPress()
+  }, [handleMicPress])
 
   return (
     <div
@@ -157,29 +148,36 @@ export default function RobotUI() {
           className="absolute bottom-0 left-0 right-0 z-20 flex justify-center"
           style={{ paddingBottom: 'env(safe-area-inset-bottom, 20px)', paddingTop: 12 }}
         >
-          <motion.button
-            onClick={handleMicTap}
-            animate={{
-              scale: isListening ? 1.15 : 1,
-              backgroundColor: isListening ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.07)',
-              borderColor: isListening ? 'rgba(239,68,68,0.8)' : 'rgba(255,255,255,0.15)',
-            }}
-            transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-            style={{
-              width: 64,
-              height: 64,
-              borderRadius: 9999,
-              border: '2px solid rgba(255,255,255,0.15)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 28,
-              touchAction: 'manipulation',
-              cursor: 'pointer',
-            }}
-          >
-            {isListening ? '🔴' : isSpeaking ? '🔊' : '🎤'}
-          </motion.button>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+            <motion.button
+              onClick={handleMicTap}
+              animate={{
+                scale: isListening ? 1.15 : 1,
+                backgroundColor: isListening
+                  ? 'rgba(239,68,68,0.3)'
+                  : autoListen
+                  ? 'rgba(124,58,237,0.25)'
+                  : 'rgba(255,255,255,0.07)',
+                borderColor: isListening
+                  ? 'rgba(239,68,68,0.8)'
+                  : autoListen
+                  ? 'rgba(124,58,237,0.7)'
+                  : 'rgba(255,255,255,0.15)',
+              }}
+              transition={{ type: 'spring', stiffness: 350, damping: 25 }}
+              style={{
+                width: 64, height: 64, borderRadius: 9999,
+                border: '2px solid rgba(255,255,255,0.15)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 28, touchAction: 'manipulation', cursor: 'pointer',
+              }}
+            >
+              {isListening ? '🔴' : isSpeaking ? '🔊' : '🎤'}
+            </motion.button>
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 0.5 }}>
+              {isListening ? '再按停止' : autoListen ? '自動聆聽中' : '按一下說話'}
+            </span>
+          </div>
         </div>
       )}
 

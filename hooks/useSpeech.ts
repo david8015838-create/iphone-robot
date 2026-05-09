@@ -88,41 +88,29 @@ export function useSpeech() {
   }, [])
 
   // ─── TTS via <audio> + /api/tts proxy ────────────────────────────
-  const speak = useCallback((text: string, onEnd?: () => void) => {
+  const speak = useCallback((text: string, lang = 'zh-TW', onEnd?: () => void) => {
     const audio = audioRef.current
     if (!audio || !text.trim()) { onEnd?.(); return }
 
-    // Stop any previous playback
     audio.pause()
     if (mouthTimerRef.current) clearInterval(mouthTimerRef.current)
 
     const cleanup = () => {
       setIsSpeaking(false)
       setMouthOpenness(0)
-      if (mouthTimerRef.current) {
-        clearInterval(mouthTimerRef.current)
-        mouthTimerRef.current = null
-      }
+      if (mouthTimerRef.current) { clearInterval(mouthTimerRef.current); mouthTimerRef.current = null }
     }
 
-    audio.onplay = () => {
+    audio.onplay  = () => {
       setIsSpeaking(true)
-      mouthTimerRef.current = setInterval(() => {
-        setMouthOpenness(Math.random() * 0.7 + 0.3)
-      }, 90)
+      mouthTimerRef.current = setInterval(() => setMouthOpenness(Math.random() * 0.7 + 0.3), 90)
     }
-
     audio.onended = () => { cleanup(); onEnd?.() }
     audio.onerror = () => { cleanup(); onEnd?.() }
 
-    // Set audio source to our TTS proxy — then play
-    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=zh-TW`
+    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${lang}`
     audio.load()
-    audio.play().catch((err) => {
-      console.warn('audio.play() failed:', err)
-      cleanup()
-      onEnd?.()
-    })
+    audio.play().catch((err) => { console.warn('audio.play() failed:', err); cleanup(); onEnd?.() })
   }, [])
 
   const stopSpeaking = useCallback(() => {
