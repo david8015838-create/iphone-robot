@@ -4,21 +4,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 type STTCallback = (transcript: string) => void
 
-const WAKE_WORDS = ['yo bro', 'yo,bro', 'hey bro', 'yo bro!', '嗨機器人', '嘿機器人', '哈囉']
+const WAKE_WORDS = ['yo bro', 'hey bro', 'yo,bro', 'yo bro!', 'bro', 'yo']
 
-function hasWakeWord(text: string): boolean {
-  const t = text.toLowerCase().trim()
-  return WAKE_WORDS.some((w) => t.includes(w))
+export function matchesWakeWord(text: string): boolean {
+  const t = text.toLowerCase().replace(/[^a-z ]/g, '').trim()
+  return WAKE_WORDS.some((w) => t === w || t.startsWith(w + ' ') || t.endsWith(' ' + w))
 }
 
-function stripWakeWord(text: string): string {
+export function stripWakeWord(text: string): string {
   let t = text.toLowerCase().trim()
-  for (const w of WAKE_WORDS) t = t.replace(w, '').trim()
-  // restore original casing for non-wake parts
-  return t || ''
+  for (const w of WAKE_WORDS) {
+    t = t.replace(new RegExp(`\\b${w}\\b`, 'gi'), '').trim()
+  }
+  return t.trim()
 }
 
-// 1-frame silent MP3 — used to unlock <audio> on iOS during user gesture
 const SILENT_MP3 =
   'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjI5LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAABAAABIADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoAAAAEgAAACQAAAAuAAAAOAAAAEIAAABMAAAAVgAAAGAAAABqAAAAdAAAAH4AAACIAAAAkgAAAJwAAACmAAAAsAAAALoAAADEAAAAzgAAANgAAADiAAAA7AAAAPYAAAD'
 
@@ -26,27 +26,27 @@ export function useSpeech() {
   const [isListening,   setIsListening]   = useState(false)
   const [isSpeaking,    setIsSpeaking]    = useState(false)
   const [mouthOpenness, setMouthOpenness] = useState(0)
+  const [isWakeActive,  setIsWakeActive]  = useState(false)
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recognitionRef  = useRef<any>(null)
-  const wakeRecRef      = useRef<any>(null)  // eslint-disable-line @typescript-eslint/no-explicit-any
-  const wakeModeRef     = useRef(false)
-  const callbackRef     = useRef<STTCallback | null>(null)
-  const audioRef        = useRef<HTMLAudioElement | null>(null)
-  const mouthTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null)
+  const recognitionRef = useRef<any>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wakeRecRef     = useRef<any>(null)
+  const wakeModeRef    = useRef(false)
+  const wakeLoopBusy   = useRef(false)   // prevent double-restart
+  const callbackRef    = useRef<STTCallback | null>(null)
+  const audioRef       = useRef<HTMLAudioElement | null>(null)
+  const mouthTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Create <audio> element and unlock it on first user gesture
   useEffect(() => {
     const audio = new Audio()
     audio.preload = 'auto'
-    audio.volume  = 1
     audioRef.current = audio
 
     const unlock = () => {
       audio.src = SILENT_MP3
       audio.play().catch(() => {})
     }
-
     document.addEventListener('touchstart', unlock, { once: true, passive: true })
     document.addEventListener('click',      unlock, { once: true, passive: true })
 
@@ -57,45 +57,34 @@ export function useSpeech() {
     }
   }, [])
 
-  // ─── STT ─────────────────────────────────────────────────────────
+  // ─── STT (active conversation) ────────────────────────────────────
   const startListening = useCallback((onResult: STTCallback) => {
-    if (typeof window === 'undefined') return
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any
     const API = w.SpeechRecognition || w.webkitSpeechRecognition
     if (!API) return
-
     callbackRef.current = onResult
-
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop() } catch { /* ignore */ }
-    }
+    try { recognitionRef.current?.stop() } catch { /* ignore */ }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rec: any = new API()
-    rec.lang              = 'zh-TW'
-    rec.interimResults    = false
-    rec.maxAlternatives   = 1
-    rec.continuous        = false
+    rec.lang = 'zh-TW'
+    rec.continuous = false
+    rec.interimResults = false
+    rec.maxAlternatives = 1
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
       const t: string = e.results[0]?.[0]?.transcript ?? ''
-      if (t.trim() && callbackRef.current) callbackRef.current(t.trim())
+      if (t.trim()) callbackRef.current?.(t.trim())
     }
     rec.onend   = () => setIsListening(false)
     rec.onerror = (e: { error: string }) => {
-      if (e.error !== 'no-speech') console.warn('STT error:', e.error)
+      if (e.error !== 'no-speech') console.warn('STT:', e.error)
       setIsListening(false)
     }
-
     recognitionRef.current = rec
-    try {
-      rec.start()
-      setIsListening(true)
-    } catch (err) {
-      console.warn('recognition.start() failed:', err)
-    }
+    try { rec.start(); setIsListening(true) } catch { /* ignore */ }
   }, [])
 
   const stopListening = useCallback(() => {
@@ -103,7 +92,84 @@ export function useSpeech() {
     setIsListening(false)
   }, [])
 
-  // ─── TTS via <audio> + /api/tts proxy ────────────────────────────
+  // ─── Wake-word detection loop ─────────────────────────────────────
+  // Uses en-US so "yo bro" is recognized properly
+  const startWakeMode = useCallback((
+    onWake: (extra: string) => void,
+    onNeedsGesture?: () => void
+  ) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any
+    const API = w.SpeechRecognition || w.webkitSpeechRecognition
+    if (!API) { onNeedsGesture?.(); return }
+
+    wakeModeRef.current = true
+    setIsWakeActive(true)
+
+    const loop = () => {
+      if (!wakeModeRef.current || wakeLoopBusy.current) return
+      wakeLoopBusy.current = true
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rec: any = new API()
+      rec.lang = 'en-US'          // ← English for "yo bro"
+      rec.continuous = false
+      rec.interimResults = false
+      rec.maxAlternatives = 5     // more alternatives = better hit rate
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rec.onresult = (e: any) => {
+        for (let i = 0; i < e.results.length; i++) {
+          for (let j = 0; j < e.results[i].length; j++) {
+            const text: string = e.results[i][j].transcript ?? ''
+            if (matchesWakeWord(text)) {
+              const extra = stripWakeWord(text)
+              onWake(extra)
+              return
+            }
+          }
+        }
+      }
+
+      rec.onend = () => {
+        wakeLoopBusy.current = false
+        if (wakeModeRef.current) setTimeout(loop, 150)
+      }
+
+      rec.onerror = (e: { error: string }) => {
+        wakeLoopBusy.current = false
+        if (!wakeModeRef.current) return
+        if (e.error === 'not-allowed') {
+          setIsWakeActive(false)
+          onNeedsGesture?.()
+        } else {
+          // no-speech / network / aborted → keep going
+          setTimeout(loop, 400)
+        }
+      }
+
+      wakeRecRef.current = rec
+      try {
+        rec.start()
+      } catch {
+        wakeLoopBusy.current = false
+        setIsWakeActive(false)
+        onNeedsGesture?.()
+      }
+    }
+
+    loop()
+  }, [])
+
+  const stopWakeMode = useCallback(() => {
+    wakeModeRef.current = false
+    wakeLoopBusy.current = false
+    setIsWakeActive(false)
+    try { wakeRecRef.current?.stop() } catch { /* ignore */ }
+    wakeRecRef.current = null
+  }, [])
+
+  // ─── TTS via <audio> + /api/tts ───────────────────────────────────
   const speak = useCallback((text: string, lang = 'zh-TW', onEnd?: () => void) => {
     const audio = audioRef.current
     if (!audio || !text.trim()) { onEnd?.(); return }
@@ -126,7 +192,7 @@ export function useSpeech() {
 
     audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${lang}`
     audio.load()
-    audio.play().catch((err) => { console.warn('audio.play() failed:', err); cleanup(); onEnd?.() })
+    audio.play().catch(() => { cleanup(); onEnd?.() })
   }, [])
 
   const stopSpeaking = useCallback(() => {
@@ -136,69 +202,8 @@ export function useSpeech() {
     if (mouthTimerRef.current) clearInterval(mouthTimerRef.current)
   }, [])
 
-  // ─── Wake-word detection loop ────────────────────────────────────
-  const startWakeMode = useCallback((onWake: (extra: string) => void, onNeedsGesture?: () => void) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = window as any
-    const API = w.SpeechRecognition || w.webkitSpeechRecognition
-    if (!API) return
-
-    wakeModeRef.current = true
-
-    const loop = () => {
-      if (!wakeModeRef.current) return
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rec: any = new API()
-      rec.lang = 'zh-TW'
-      rec.continuous = false
-      rec.interimResults = false
-      rec.maxAlternatives = 3
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      rec.onresult = (e: any) => {
-        for (let i = 0; i < e.results.length; i++) {
-          for (let j = 0; j < e.results[i].length; j++) {
-            const text: string = e.results[i][j].transcript ?? ''
-            if (hasWakeWord(text)) {
-              const extra = stripWakeWord(text)
-              onWake(extra)
-              return
-            }
-          }
-        }
-      }
-
-      rec.onend = () => {
-        if (wakeModeRef.current) setTimeout(loop, 200)
-      }
-
-      rec.onerror = (e: { error: string }) => {
-        if (!wakeModeRef.current) return
-        if (e.error === 'not-allowed') {
-          // Microphone permission denied or needs gesture — notify caller
-          onNeedsGesture?.()
-        } else {
-          // no-speech / aborted / network — keep looping
-          setTimeout(loop, 500)
-        }
-      }
-
-      wakeRecRef.current = rec
-      try { rec.start() } catch { onNeedsGesture?.() }
-    }
-
-    loop()
-  }, [])
-
-  const stopWakeMode = useCallback(() => {
-    wakeModeRef.current = false
-    try { wakeRecRef.current?.stop() } catch { /* ignore */ }
-    wakeRecRef.current = null
-  }, [])
-
   return {
-    isListening, isSpeaking, mouthOpenness,
+    isListening, isSpeaking, mouthOpenness, isWakeActive,
     startListening, stopListening, speak, stopSpeaking,
     startWakeMode, stopWakeMode,
   }

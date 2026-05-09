@@ -43,7 +43,7 @@ export function useRobot() {
   const onWakeDetectedRef  = useRef<((extra: string) => void) | null>(null)
 
   const {
-    isListening, isSpeaking, mouthOpenness,
+    isListening, isSpeaking, mouthOpenness, isWakeActive,
     startListening, stopListening, speak, stopSpeaking,
     startWakeMode, stopWakeMode,
   } = useSpeech()
@@ -302,7 +302,7 @@ export function useRobot() {
 
   return {
     emotion, messages, keys, isThinking, isListening, isSpeaking,
-    mouthOpenness, showHistory, pendingAction, autoListen, wakeMode, needsGesture,
+    mouthOpenness, showHistory, pendingAction, autoListen, wakeMode, needsGesture, isWakeActive,
     setShowHistory, sendMessage, addKey, removeKey, resetKey,
     handleMicPress, handleMicRelease, confirmAction, cancelAction, activateByGesture,
   }

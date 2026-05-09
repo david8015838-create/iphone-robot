@@ -19,7 +19,7 @@ export default function RobotUI() {
     mouthOpenness,
     pendingAction,
     showHistory,
-    autoListen, wakeMode, needsGesture,
+    autoListen, wakeMode, needsGesture, isWakeActive,
     setShowHistory,
     sendMessage,
     addKey,
@@ -102,6 +102,34 @@ export default function RobotUI() {
               <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12, marginTop: 6 }}>
                 之後說「yo bro」就能喚醒
               </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ══ Wake mode indicator — top-center ══ */}
+      <AnimatePresence>
+        {isWakeActive && !isListening && !isSpeaking && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="absolute top-3 left-0 right-0 z-10 flex justify-center pointer-events-none"
+          >
+            <motion.div
+              animate={{ opacity: [0.5, 1, 0.5] }}
+              transition={{ repeat: Infinity, duration: 2 }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                background: 'rgba(124,58,237,0.15)',
+                border: '1px solid rgba(124,58,237,0.4)',
+                borderRadius: 999, padding: '4px 12px',
+              }}
+            >
+              <span style={{ fontSize: 12 }}>👂</span>
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', letterSpacing: 0.5 }}>
+                說「yo bro」喚醒
+              </span>
             </motion.div>
           </motion.div>
         )}
