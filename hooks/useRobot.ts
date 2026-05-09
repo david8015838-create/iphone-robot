@@ -30,6 +30,7 @@ export function useRobot() {
   const [keys,          setKeys]          = useState<KeyEntry[]>([])
   const [isThinking,    setIsThinking]    = useState(false)
   const [autoListen,    setAutoListen]    = useState(false)
+  const [wakeMode,      setWakeMode]      = useState(false)
   const [pendingAction, setPendingAction] = useState<{
     name: ActionName; args: Record<string, string>; label: string
   } | null>(null)
@@ -39,7 +40,11 @@ export function useRobot() {
   const emotionEng  = useRef<EmotionEngine | null>(null)
   const autoRef     = useRef(false)   // mirror of autoListen for callbacks
 
-  const { isListening, isSpeaking, mouthOpenness, startListening, stopListening, speak, stopSpeaking } = useSpeech()
+  const {
+    isListening, isSpeaking, mouthOpenness,
+    startListening, stopListening, speak, stopSpeaking,
+    startWakeMode, stopWakeMode,
+  } = useSpeech()
   const { storeConversation, extractAndSaveMemories, runPersonalityReflection } = useMemory()
 
   useEffect(() => {
@@ -146,13 +151,27 @@ export function useRobot() {
         emotionEng.current?.setEmotion('speaking')
         speak(botText, botLang, () => {
           emotionEng.current?.setEmotion('idle')
-          // Auto-listen: restart mic after speaking if mode is on
-          if (autoRef.current && startListenRef.current) {
+          if (autoRef.current) {
             setTimeout(() => {
-              if (autoRef.current) {
-                emotionEng.current?.setEmotion('listening')
-                startListenRef.current!((t) => { if (t) sendMessageRef.current?.(t) })
-              }
+              if (!autoRef.current) return
+              emotionEng.current?.setEmotion('listening')
+              // Resume wake-word detection after speaking
+              startWakeMode((extra) => {
+                stopWakeMode()
+                if (extra.trim()) {
+                  sendMessageRef.current?.(extra)
+                } else {
+                  startListenRef.current?.((t) => {
+                    if (t) sendMessageRef.current?.(t)
+                  })
+                }
+              })
+              // Also start a regular listen session for immediate input
+              startListenRef.current?.((t) => {
+                if (t && !t.toLowerCase().includes('yo bro')) {
+                  sendMessageRef.current?.(t)
+                }
+              })
             }, 400)
           }
         })
@@ -187,30 +206,69 @@ export function useRobot() {
 
   const cancelAction = useCallback(() => { setPendingAction(null); speak('好，取消了', 'zh-TW') }, [speak])
 
-  // ─── Mic button: tap to toggle auto-listen mode ───────────────────
+  // Called when wake word is detected — stop wake loop, start active listen
+  const onWakeDetected = useCallback((extra: string) => {
+    stopWakeMode()
+    emotionEng.current?.setEmotion('listening')
+
+    if (extra.trim()) {
+      // User said "yo bro [question]" all in one — send immediately
+      sendMessageRef.current?.(extra)
+    } else {
+      // Just the wake word — start active listening for the question
+      setAutoListen(true)
+      startListening((transcript) => {
+        if (transcript.trim()) sendMessageRef.current?.(transcript)
+      })
+    }
+  }, [stopWakeMode, startListening])
+
+  // ─── Mic button ──────────────────────────────────────────────────
   const handleMicPress = useCallback(() => {
+    // If in wake mode → exit everything
+    if (wakeMode) {
+      stopWakeMode()
+      setWakeMode(false)
+      setAutoListen(false)
+      stopListening()
+      emotionEng.current?.setEmotion('idle')
+      return
+    }
+
+    // If actively listening → stop auto mode
     if (isListening) {
-      // Tap while listening → stop and disable auto-listen
       stopListening()
       setAutoListen(false)
       emotionEng.current?.setEmotion('idle')
       return
     }
+
     if (isSpeaking) stopSpeaking()
 
-    // Enable auto-listen mode and start listening
+    // First tap → enter wake-word detection mode
+    setWakeMode(true)
     setAutoListen(true)
     emotionEng.current?.setEmotion('listening')
-    startListening((transcript) => {
-      if (transcript.trim()) sendMessageRef.current?.(transcript)
-    })
-  }, [isListening, isSpeaking, startListening, stopListening, stopSpeaking])
 
-  const handleMicRelease = useCallback(() => {}, []) // no-op (tap-to-toggle now)
+    // Start wake detection loop
+    startWakeMode(onWakeDetected)
+
+    // Also do immediate active listen so user can start talking right away
+    startListening((transcript) => {
+      if (transcript.trim()) {
+        if (!transcript.toLowerCase().includes('yo bro')) {
+          sendMessageRef.current?.(transcript)
+        }
+        // if it contains wake word, the wake loop handles it
+      }
+    })
+  }, [wakeMode, isListening, isSpeaking, startWakeMode, startListening, stopListening, stopSpeaking, stopWakeMode, onWakeDetected])
+
+  const handleMicRelease = useCallback(() => {}, [])
 
   return {
     emotion, messages, keys, isThinking, isListening, isSpeaking,
-    mouthOpenness, showHistory, pendingAction, autoListen,
+    mouthOpenness, showHistory, pendingAction, autoListen, wakeMode,
     setShowHistory, sendMessage, addKey, removeKey, resetKey,
     handleMicPress, handleMicRelease, confirmAction, cancelAction,
   }

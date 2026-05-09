@@ -19,7 +19,7 @@ export default function RobotUI() {
     mouthOpenness,
     pendingAction,
     showHistory,
-    autoListen,
+    autoListen, wakeMode,
     setShowHistory,
     sendMessage,
     addKey,
@@ -155,13 +155,13 @@ export default function RobotUI() {
                 scale: isListening ? 1.15 : 1,
                 backgroundColor: isListening
                   ? 'rgba(239,68,68,0.3)'
-                  : autoListen
-                  ? 'rgba(124,58,237,0.25)'
+                  : wakeMode
+                  ? 'rgba(124,58,237,0.15)'
                   : 'rgba(255,255,255,0.07)',
                 borderColor: isListening
                   ? 'rgba(239,68,68,0.8)'
-                  : autoListen
-                  ? 'rgba(124,58,237,0.7)'
+                  : wakeMode
+                  ? 'rgba(124,58,237,0.5)'
                   : 'rgba(255,255,255,0.15)',
               }}
               transition={{ type: 'spring', stiffness: 350, damping: 25 }}
@@ -175,7 +175,7 @@ export default function RobotUI() {
               {isListening ? '🔴' : isSpeaking ? '🔊' : '🎤'}
             </motion.button>
             <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 0.5 }}>
-              {isListening ? '再按停止' : autoListen ? '自動聆聽中' : '按一下說話'}
+              {isListening ? '再按停止' : wakeMode ? '說 yo bro 喚醒' : '按一下啟動'}
             </span>
           </div>
         </div>
