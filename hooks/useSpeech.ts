@@ -1,157 +1,139 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 type STTCallback = (transcript: string) => void
 
+// 1-frame silent MP3 — used to unlock <audio> on iOS during user gesture
+const SILENT_MP3 =
+  'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjI5LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAABAAABIADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoAAAAEgAAACQAAAAuAAAAOAAAAEIAAABMAAAAVgAAAGAAAABqAAAAdAAAAH4AAACIAAAAkgAAAJwAAACmAAAAsAAAALoAAADEAAAAzgAAANgAAADiAAAA7AAAAPYAAAD'
+
 export function useSpeech() {
-  const [isListening, setIsListening] = useState(false)
-  const [isSpeaking,  setIsSpeaking]  = useState(false)
+  const [isListening,   setIsListening]   = useState(false)
+  const [isSpeaking,    setIsSpeaking]    = useState(false)
   const [mouthOpenness, setMouthOpenness] = useState(0)
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null)
-  const mouthTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null)
   const callbackRef    = useRef<STTCallback | null>(null)
+  const audioRef       = useRef<HTMLAudioElement | null>(null)
+  const mouthTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const startListening = useCallback((onResult: STTCallback) => {
-    if (typeof window === 'undefined') return
+  // Create <audio> element and unlock it on first user gesture
+  useEffect(() => {
+    const audio = new Audio()
+    audio.preload = 'auto'
+    audio.volume  = 1
+    audioRef.current = audio
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = window as any
-    const SpeechRecognitionAPI = w.SpeechRecognition || w.webkitSpeechRecognition
-    if (!SpeechRecognitionAPI) {
-      console.warn('SpeechRecognition not supported')
-      return
+    const unlock = () => {
+      audio.src = SILENT_MP3
+      audio.play().catch(() => {})
     }
 
-    // Store callback in ref so we don't recreate recognition on re-renders
+    document.addEventListener('touchstart', unlock, { once: true, passive: true })
+    document.addEventListener('click',      unlock, { once: true, passive: true })
+
+    return () => {
+      audio.pause()
+      document.removeEventListener('touchstart', unlock)
+      document.removeEventListener('click',      unlock)
+    }
+  }, [])
+
+  // ─── STT ─────────────────────────────────────────────────────────
+  const startListening = useCallback((onResult: STTCallback) => {
+    if (typeof window === 'undefined') return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any
+    const API = w.SpeechRecognition || w.webkitSpeechRecognition
+    if (!API) return
+
     callbackRef.current = onResult
 
-    // Stop any existing session first
     if (recognitionRef.current) {
       try { recognitionRef.current.stop() } catch { /* ignore */ }
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const recognition: any = new SpeechRecognitionAPI()
-    recognition.lang = 'zh-TW'
-    recognition.interimResults = false
-    recognition.maxAlternatives = 1
-    recognition.continuous = false  // iOS requires false
+    const rec: any = new API()
+    rec.lang              = 'zh-TW'
+    rec.interimResults    = false
+    rec.maxAlternatives   = 1
+    rec.continuous        = false
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    recognition.onresult = (event: any) => {
-      const transcript: string = event.results[0]?.[0]?.transcript ?? ''
-      if (transcript.trim() && callbackRef.current) {
-        callbackRef.current(transcript.trim())
-      }
+    rec.onresult = (e: any) => {
+      const t: string = e.results[0]?.[0]?.transcript ?? ''
+      if (t.trim() && callbackRef.current) callbackRef.current(t.trim())
     }
-
-    recognition.onend = () => {
+    rec.onend   = () => setIsListening(false)
+    rec.onerror = (e: { error: string }) => {
+      if (e.error !== 'no-speech') console.warn('STT error:', e.error)
       setIsListening(false)
     }
 
-    recognition.onerror = (e: { error: string }) => {
-      // 'no-speech' is normal — user just didn't speak
-      if (e.error !== 'no-speech') {
-        console.warn('SpeechRecognition error:', e.error)
-      }
-      setIsListening(false)
-    }
-
-    recognitionRef.current = recognition
-
-    // ─── Critical for iOS: call start() synchronously, right here ───
+    recognitionRef.current = rec
     try {
-      recognition.start()
+      rec.start()
       setIsListening(true)
     } catch (err) {
       console.warn('recognition.start() failed:', err)
-      setIsListening(false)
     }
   }, [])
 
   const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop() } catch { /* ignore */ }
-    }
+    try { recognitionRef.current?.stop() } catch { /* ignore */ }
     setIsListening(false)
   }, [])
 
+  // ─── TTS via <audio> + /api/tts proxy ────────────────────────────
   const speak = useCallback((text: string, onEnd?: () => void) => {
-    if (typeof window === 'undefined') return
-    window.speechSynthesis.cancel()
+    const audio = audioRef.current
+    if (!audio || !text.trim()) { onEnd?.(); return }
 
-    const doSpeak = () => {
-      const utterance = new SpeechSynthesisUtterance(text)
-      utterance.lang = 'zh-TW'
-      utterance.rate = 1.0
-      utterance.pitch = 1.1
-      utterance.volume = 1.0
+    // Stop any previous playback
+    audio.pause()
+    if (mouthTimerRef.current) clearInterval(mouthTimerRef.current)
 
-      // Pick Chinese voice if available
-      const voices = window.speechSynthesis.getVoices()
-      const zhVoice = voices.find((v) => v.lang.startsWith('zh'))
-      if (zhVoice) utterance.voice = zhVoice
-
-      utterance.onstart = () => {
-        setIsSpeaking(true)
-        mouthTimerRef.current = setInterval(() => {
-          setMouthOpenness(Math.random() * 0.8 + 0.2)
-        }, 80)
-      }
-
-      const cleanup = () => {
-        setIsSpeaking(false)
-        setMouthOpenness(0)
-        if (mouthTimerRef.current) clearInterval(mouthTimerRef.current)
-      }
-
-      utterance.onend   = () => { cleanup(); onEnd?.() }
-      utterance.onerror = () => { cleanup() }
-
-      window.speechSynthesis.speak(utterance)
-
-      // iOS workaround: speechSynthesis can stall silently — nudge it
-      const nudge = setInterval(() => {
-        if (!window.speechSynthesis.speaking) {
-          clearInterval(nudge)
-          return
-        }
-        window.speechSynthesis.pause()
-        window.speechSynthesis.resume()
-      }, 10_000)
-
-      utterance.onend = () => {
-        clearInterval(nudge)
-        cleanup()
-        onEnd?.()
+    const cleanup = () => {
+      setIsSpeaking(false)
+      setMouthOpenness(0)
+      if (mouthTimerRef.current) {
+        clearInterval(mouthTimerRef.current)
+        mouthTimerRef.current = null
       }
     }
 
-    // iOS: voices list may be empty on first call — wait for it
-    const voices = window.speechSynthesis.getVoices()
-    if (voices.length > 0) {
-      doSpeak()
-    } else {
-      window.speechSynthesis.onvoiceschanged = () => {
-        window.speechSynthesis.onvoiceschanged = null
-        doSpeak()
-      }
-      // Fallback: just speak without a specific voice after short delay
-      setTimeout(() => {
-        if (!isSpeaking) doSpeak()
-      }, 500)
+    audio.onplay = () => {
+      setIsSpeaking(true)
+      mouthTimerRef.current = setInterval(() => {
+        setMouthOpenness(Math.random() * 0.7 + 0.3)
+      }, 90)
     }
-  }, [isSpeaking])
+
+    audio.onended = () => { cleanup(); onEnd?.() }
+    audio.onerror = () => { cleanup(); onEnd?.() }
+
+    // Set audio source to our TTS proxy — then play
+    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=zh-TW`
+    audio.load()
+    audio.play().catch((err) => {
+      console.warn('audio.play() failed:', err)
+      cleanup()
+      onEnd?.()
+    })
+  }, [])
 
   const stopSpeaking = useCallback(() => {
-    window.speechSynthesis.cancel()
+    audioRef.current?.pause()
     setIsSpeaking(false)
     setMouthOpenness(0)
     if (mouthTimerRef.current) clearInterval(mouthTimerRef.current)
   }, [])
 
-  return { isListening, isSpeaking, mouthOpenness, startListening, stopListening, speak, stopSpeaking }
+  return {
+    isListening, isSpeaking, mouthOpenness,
+    startListening, stopListening, speak, stopSpeaking,
+  }
 }
