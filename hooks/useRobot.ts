@@ -229,19 +229,23 @@ export function useRobot() {
 
   const onWakeDetected = useCallback((extra: string) => {
     stopWakeMode()
-    emotionEng.current?.setEmotion('listening')
+    emotionEng.current?.setEmotion('happy')
 
-    if (extra.trim()) {
-      // User said "yo bro [question]" all in one — send immediately
-      sendMessageRef.current?.(extra)
-    } else {
-      // Just the wake word — start active listening for the question
-      setAutoListen(true)
-      startListening((transcript) => {
-        if (transcript.trim()) sendMessageRef.current?.(transcript)
-      })
-    }
-  }, [stopWakeMode, startListening])
+    // Immediately respond with voice acknowledgement
+    speak('yo bro 我在', 'zh-TW', () => {
+      emotionEng.current?.setEmotion('listening')
+      if (extra.trim()) {
+        // User said "yo bro [question]" all in one
+        sendMessageRef.current?.(extra)
+      } else {
+        // Start listening for the actual question
+        setAutoListen(true)
+        startListenRef.current?.((transcript) => {
+          if (transcript.trim()) sendMessageRef.current?.(transcript)
+        })
+      }
+    })
+  }, [stopWakeMode, speak, startListening])
 
   // Keep ref current so the auto-start closure can call it
   useEffect(() => { onWakeDetectedRef.current = onWakeDetected }, [onWakeDetected])
