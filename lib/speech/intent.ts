@@ -5,7 +5,8 @@
 
 // Wake words / direct address
 const ADDRESS_WORDS = [
-  'yo bro', 'hey bro', 'yo', 'bro',
+  'yo bro', 'hey bro', 'yo', 'bro', 'hey', 'dude',
+  'siri', 'jarvis',
   '嗨機器人', '嘿機器人', '哈囉機器人',
   '機器人', '助手',
 ]
@@ -14,11 +15,18 @@ const ADDRESS_WORDS = [
 const COMMAND_HINTS = [
   '幫我', '幫個忙', '能不能', '可以嗎', '可以幫',
   '播', '打開', '搜尋', '查一下', '提醒我', '傳訊息',
-  'play', 'open', 'search', 'remind me', 'send',
+  '告訴我', '查', '播放',
+  'play', 'open', 'search', 'remind me', 'send', 'tell me',
+  'find', 'show me', 'help', 'can you', 'could you',
+  "what's", 'how do', 'is it',
 ]
 
 // Question indicators
-const QUESTION_HINTS = ['嗎', '呢', '?', '？', 'what', 'how', 'why', 'when', 'where']
+const QUESTION_HINTS = [
+  '嗎', '呢', '?', '？',
+  'what', 'how', 'why', 'when', 'where', 'who',
+  'should', 'would', 'could', 'is', 'are', 'do', 'does',
+]
 
 export interface IntentResult {
   addressed: boolean
