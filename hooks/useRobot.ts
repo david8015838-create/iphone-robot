@@ -17,6 +17,7 @@ import { AgentLoop } from '@/lib/agent/loop'
 import { ContinuousListener } from '@/lib/speech/continuous'
 import { buildConversationPrompt } from '@/lib/memory/context'
 import { logEvent } from '@/lib/memory/store'
+import { ensureSeedDocs } from '@/lib/memory/docs'
 import { runConsolidation, shouldRunConsolidation } from '@/lib/memory/consolidate'
 
 interface Message {
@@ -58,6 +59,9 @@ export function useRobot() {
     incrementSession()
     setInnerState(getInnerState())
 
+    // Seed core memory docs (idempotent)
+    ensureSeedDocs().catch(() => {})
+
     // Run memory consolidation in background if it's been a while
     if (shouldRunConsolidation()) {
       setTimeout(() => {
@@ -82,16 +86,18 @@ export function useRobot() {
       busyRef: busyRef.current,
     })
 
-    // Start continuous listener
+    // Start continuous listener — pauses during thinking + speaking
+    // to avoid competing for iOS audio session
     listener.current = new ContinuousListener()
     listener.current.start({
-      onSpeech: handleSpeechRef.current,
+      onSpeech: (text) => handleSpeechRef.current(text),
       onAmbient: (t) => {
         setAmbientCount((c) => c + 1)
         logEvent({ timestamp: Date.now(), type: 'ambient', content: t }).catch(() => {})
       },
       onNeedsGesture: () => setNeedsGesture(true),
-      isBotSpeaking: () => isSpeakingRef.current,
+      // Pause listener while thinking OR speaking — iOS won't let mic + speaker share session
+      isBotSpeaking: () => isSpeakingRef.current || busyRef.current.current,
       isBotRecent: () => Date.now() - lastBotAt.current < 30_000,
       isActive: () => Date.now() < activeUntil.current,
     })
@@ -234,7 +240,7 @@ export function useRobot() {
         logEvent({ timestamp: Date.now(), type: 'ambient', content: t }).catch(() => {})
       },
       onNeedsGesture: () => setNeedsGesture(true),
-      isBotSpeaking: () => isSpeakingRef.current,
+      isBotSpeaking: () => isSpeakingRef.current || busyRef.current.current,
       isBotRecent: () => Date.now() - lastBotAt.current < 30_000,
       isActive: () => Date.now() < activeUntil.current,
     })

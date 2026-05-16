@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import RobotFace from '@/components/robot-face'
 import KeyManager from '@/components/settings/KeyManager'
+import MemoryFiles from '@/components/memory-files'
 import { useRobot } from '@/hooks/useRobot'
 import { useCamera } from '@/hooks/useCamera'
 import { useAudioUnlock } from '@/hooks/useAudioUnlock'
@@ -23,6 +24,7 @@ export default function RobotUI() {
 
   const [isMenuOpen,     setIsMenuOpen]     = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [isMemoryOpen,   setIsMemoryOpen]   = useState(false)
   const [showTextInput,  setShowTextInput]  = useState(false)
   const [inputText,      setInputText]      = useState('')
 
@@ -199,12 +201,14 @@ export default function RobotUI() {
                 )}
               </AnimatePresence>
 
-              <div className="grid grid-cols-3 gap-2 px-4 py-3">
+              <div className="grid grid-cols-4 gap-2 px-4 py-3">
                 <MenuBtn icon="⌨️" label="文字" active={showTextInput} activeColor="purple"
                   onClick={() => setShowTextInput((v) => !v)} />
                 <MenuBtn icon="📷" label={isCameraOn ? '關鏡頭' : '看看'} active={isCameraOn} activeColor="blue"
                   onClick={toggleCamera} />
-                <MenuBtn icon="💬" label="記錄"
+                <MenuBtn icon="📁" label="記憶"
+                  onClick={() => { setIsMemoryOpen(true); setIsMenuOpen(false) }} />
+                <MenuBtn icon="💬" label="對話"
                   onClick={() => { setShowHistory(true); setIsMenuOpen(false) }} />
               </div>
 
@@ -291,6 +295,13 @@ export default function RobotUI() {
         {isSettingsOpen && (
           <KeyManager keys={keys} onAdd={addKey} onRemove={removeKey} onReset={resetKey}
             onClose={() => setIsSettingsOpen(false)} />
+        )}
+      </AnimatePresence>
+
+      {/* ══════════ Memory Files ══════════ */}
+      <AnimatePresence>
+        {isMemoryOpen && (
+          <MemoryFiles onClose={() => setIsMemoryOpen(false)} />
         )}
       </AnimatePresence>
     </div>

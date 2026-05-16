@@ -3,12 +3,12 @@ import {
   markEventsConsolidated,
   saveDailySummary,
   saveIdentityFact,
-  savePersonalityTrait,
   getOldUnconsolidatedDailies,
   markDailiesConsolidated,
   saveWeeklyTheme,
   pruneOldRawEvents,
 } from './store'
+import { writeDoc, appendToDoc, getDoc } from './docs'
 import { getKeyRotator } from '@/lib/key-rotator'
 import { getModelName } from '@/lib/model-config'
 
@@ -79,6 +79,27 @@ export async function runConsolidation(): Promise<ConsolidationResult> {
         result.newFacts++
       }
 
+      // ─── Also write to human-readable md files ────────────────
+      // Daily journal entry
+      await writeDoc(
+        `journal/${date}.md`,
+        `# ${date}\n\n**整體氛圍：** ${summary.emotional_tone}\n\n## 這天發生的\n\n${summary.summary}\n\n## 我對他的觀察\n\n${summary.user_state}\n\n## 我自己的感受\n\n${summary.bot_state}\n\n## 新學到的事\n\n${summary.key_facts.map((f) => `- ${f}`).join('\n')}\n`,
+        date,
+        'journal',
+      )
+
+      // Update about_you.md with new facts
+      if (summary.key_facts.length > 0) {
+        const existing = await getDoc('about_you.md')
+        const existingContent = existing?.content ?? ''
+        const newFactsBlock = summary.key_facts.map((f) => `- ${f} _(${date})_`).join('\n')
+        // Append to "新學到" section
+        const updatedContent = existingContent.includes('## 最近學到')
+          ? existingContent.replace(/## 最近學到[\s\S]*?(?=##|$)/, `## 最近學到\n\n${newFactsBlock}\n\n`)
+          : existingContent.trimEnd() + `\n\n## 最近學到\n\n${newFactsBlock}\n`
+        await writeDoc('about_you.md', updatedContent, '關於你', 'about_you')
+      }
+
       // Mark consolidated
       const ids = dayEvents.map((e) => e.id!).filter(Boolean)
       await markEventsConsolidated(ids)
@@ -104,6 +125,13 @@ export async function runConsolidation(): Promise<ConsolidationResult> {
         const theme = await summarizeWeek(week, weekDailies, key.value)
         if (!theme) continue
         await saveWeeklyTheme(theme)
+        // Write weekly md file
+        await writeDoc(
+          `weekly/${week}.md`,
+          `# ${week}\n\n**主題：** ${theme.theme}\n\n${theme.summary}\n\n## 重要時刻\n\n${theme.key_moments.map((m) => `- ${m}`).join('\n')}\n`,
+          week,
+          'weekly',
+        )
         const ids = weekDailies.map((d) => d.id!).filter(Boolean)
         await markDailiesConsolidated(ids)
         result.dailiesConsolidated += ids.length

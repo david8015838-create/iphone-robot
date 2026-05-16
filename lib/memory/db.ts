@@ -70,6 +70,19 @@ export interface StateLog {
   on_my_mind: string
 }
 
+// ─── Human-readable markdown memory docs ────────────────────────
+// These are the "soul files" — the agent reads & writes them,
+// the user can browse them in the app.
+export interface MemoryDoc {
+  path: string                       // e.g., "identity.md"
+  title: string                      // display name
+  category: 'core' | 'about_you' | 'between_us' | 'journal' | 'weekly'
+  content: string                    // markdown
+  pinned?: boolean                   // pin to top of file list
+  updated_at: number
+  created_at: number
+}
+
 class RobotDB extends Dexie {
   raw_events!:         EntityTable<RawEvent, 'id'>
   daily_summaries!:    EntityTable<DailySummary, 'id'>
@@ -77,6 +90,7 @@ class RobotDB extends Dexie {
   identity_facts!:     EntityTable<IdentityFact, 'id'>
   personality_traits!: EntityTable<PersonalityTraitV2, 'id'>
   state_log!:          EntityTable<StateLog, 'id'>
+  memory_docs!:        EntityTable<MemoryDoc, 'path'>
 
   constructor() {
     super('robot-agent-db')
@@ -87,6 +101,15 @@ class RobotDB extends Dexie {
       identity_facts:     '++id, category, strength, last_referenced',
       personality_traits: '++id, trait_type, strength, deprecated',
       state_log:          '++id, timestamp',
+    })
+    this.version(2).stores({
+      raw_events:         '++id, timestamp, type, consolidated',
+      daily_summaries:    '++id, date, consolidated, created_at',
+      weekly_themes:      '++id, week, created_at',
+      identity_facts:     '++id, category, strength, last_referenced',
+      personality_traits: '++id, trait_type, strength, deprecated',
+      state_log:          '++id, timestamp',
+      memory_docs:        'path, category, updated_at',
     })
   }
 }

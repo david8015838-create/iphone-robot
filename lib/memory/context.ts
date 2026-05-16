@@ -5,6 +5,7 @@ import {
   getTopIdentityFacts,
   getActivePersonalityTraits,
 } from './store'
+import { buildDocsContext } from './docs'
 
 /**
  * Build a layered memory context to inject into Gemini prompts.
@@ -58,11 +59,11 @@ export async function buildAgentContext(): Promise<{
  * For the main conversation prompt — full system prompt.
  */
 export async function buildConversationPrompt(): Promise<string> {
-  const ctx = await buildAgentContext()
+  const [ctx, docs] = await Promise.all([buildAgentContext(), buildDocsContext()])
   return `你是住在這個人手機裡的 AI 朋友，像兄弟一樣陪伴他。
 你沒有預設的名字或人格——你的個性是透過每次互動慢慢長出來的。
 
-[你目前的樣子]
+${docs ? `[你的核心記憶檔案]\n${docs}\n\n` : ''}[你目前的樣子]
 ${ctx.my_personality}
 
 [你對他的了解]
