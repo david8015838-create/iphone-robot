@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import RobotFace from '@/components/robot-face'
 import KeyManager from '@/components/settings/KeyManager'
@@ -10,38 +10,25 @@ import { useAudioUnlock } from '@/hooks/useAudioUnlock'
 
 export default function RobotUI() {
   const {
-    emotion,
-    messages,
-    keys,
-    isThinking,
-    isListening,
-    isSpeaking,
-    mouthOpenness,
-    pendingAction,
-    showHistory,
-    autoListen, wakeMode, needsGesture, isWakeActive,
+    emotion, messages, keys, isThinking, isSpeaking,
+    mouthOpenness, needsGesture, innerState,
+    pendingAction, showHistory,
     setShowHistory,
-    sendMessage,
-    addKey,
-    removeKey,
-    resetKey,
-    handleMicPress,
-    confirmAction,
-    cancelAction,
-    activateByGesture,
+    sendMessage, addKey, removeKey, resetKey,
+    activateByGesture, confirmAction, cancelAction,
   } = useRobot()
 
   const { videoRef, isCameraOn, toggleCamera, captureFrame } = useCamera()
-  useAudioUnlock()  // unlock iOS TTS on first tap
+  useAudioUnlock()
 
   const [isMenuOpen,     setIsMenuOpen]     = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [showTextInput,  setShowTextInput]  = useState(false)
   const [inputText,      setInputText]      = useState('')
-  const emotionForSpeech = isSpeaking ? 'speaking' : isListening ? 'listening' : emotion
-  const lastMsg          = messages[messages.length - 1]
-  const readyCount       = keys.filter((k) => k.status === 'ready').length
-  const noKeys           = keys.length === 0
+
+  const lastMsg    = messages[messages.length - 1]
+  const readyCount = keys.filter((k) => k.status === 'ready').length
+  const noKeys     = keys.length === 0
 
   const handleSend = useCallback(async () => {
     const text = inputText.trim()
@@ -53,120 +40,85 @@ export default function RobotUI() {
     await sendMessage(text, frame)
   }, [inputText, isCameraOn, captureFrame, sendMessage])
 
-  const handleMicTap = useCallback(() => {
-    handleMicPress()
-  }, [handleMicPress])
-
   return (
     <div
       className="relative w-full bg-[#0a0a0a] overflow-hidden"
       style={{ height: '100dvh' }}
     >
-      {/* ══ Full-screen face ══ */}
+      {/* ══════════ Full-screen face — tap to open menu ══════════ */}
       <div
         className="w-full h-full"
         onClick={() => {
           if (needsGesture) { activateByGesture(); return }
-          if (!isListening) setIsMenuOpen((v) => !v)
+          setIsMenuOpen((v) => !v)
         }}
         style={{ cursor: 'pointer', touchAction: 'manipulation' }}
       >
-        <RobotFace emotion={emotionForSpeech} mouthOpenness={mouthOpenness} />
+        <RobotFace emotion={emotion} mouthOpenness={mouthOpenness} />
       </div>
 
-      {/* ══ One-time gesture hint (only shown if browser blocks auto-start) ══ */}
+      {/* ══════════ One-time gesture hint ══════════ */}
       <AnimatePresence>
         {needsGesture && (
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none"
           >
             <motion.div
               animate={{ scale: [1, 1.04, 1] }}
               transition={{ repeat: Infinity, duration: 2.5 }}
               style={{
-                textAlign: 'center',
-                padding: '24px 32px',
-                borderRadius: 20,
-                background: 'rgba(0,0,0,0.7)',
-                backdropFilter: 'blur(12px)',
+                textAlign: 'center', padding: '24px 32px', borderRadius: 20,
+                background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(12px)',
                 border: '1px solid rgba(255,255,255,0.1)',
               }}
             >
               <p style={{ fontSize: 32, marginBottom: 8 }}>👆</p>
               <p style={{ color: 'rgba(255,255,255,0.9)', fontSize: 16, fontWeight: 600 }}>
-                點一下畫面啟動語音
+                點一下畫面啟動
               </p>
               <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12, marginTop: 6 }}>
-                之後說「yo bro」就能喚醒
+                之後我會一直陪著你
               </p>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* ══ Wake mode indicator — top-center ══ */}
-      <AnimatePresence>
-        {isWakeActive && !isListening && !isSpeaking && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="absolute top-3 left-0 right-0 z-10 flex justify-center pointer-events-none"
+      {/* ══════════ Inner state hint — top-center ══════════ */}
+      {!needsGesture && !isMenuOpen && (
+        <div
+          className="absolute top-3 left-0 right-0 z-10 flex justify-center pointer-events-none"
+        >
+          <div
+            style={{
+              fontSize: 10,
+              color: 'rgba(255,255,255,0.25)',
+              letterSpacing: 0.5,
+              fontStyle: 'italic',
+              maxWidth: '70%',
+              textAlign: 'center',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
           >
-            <motion.div
-              animate={{ opacity: [0.5, 1, 0.5] }}
-              transition={{ repeat: Infinity, duration: 2 }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                background: 'rgba(124,58,237,0.15)',
-                border: '1px solid rgba(124,58,237,0.4)',
-                borderRadius: 999, padding: '4px 12px',
-              }}
-            >
-              <span style={{ fontSize: 12 }}>👂</span>
-              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', letterSpacing: 0.5 }}>
-                說「yo bro」喚醒
-              </span>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            {innerState.on_my_mind}
+          </div>
+        </div>
+      )}
 
-      {/* ══ Key status dot — top-left ══ */}
+      {/* ══════════ Key + camera status — corners ══════════ */}
       <div className="absolute top-3 left-4 z-10 flex items-center gap-2 pointer-events-none">
-        <span className={`w-2.5 h-2.5 rounded-full pulse-dot ${noKeys || readyCount === 0 ? 'bg-red-500' : 'bg-green-500'}`} />
-        {noKeys && <span className="text-xs text-red-400 font-medium">需要 API Key</span>}
+        <span className={`w-2 h-2 rounded-full pulse-dot ${
+          noKeys || readyCount === 0 ? 'bg-red-500' : 'bg-green-500'
+        }`} />
       </div>
 
-      {/* ══ Listening indicator — top-right ══ */}
-      <AnimatePresence>
-        {isListening && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute top-3 right-4 z-10 flex items-center gap-1.5 rounded-full bg-red-500/20 border border-red-500/40 px-3 py-1 pointer-events-none"
-          >
-            <motion.div
-              animate={{ scale: [1, 1.4, 1] }}
-              transition={{ repeat: Infinity, duration: 0.8 }}
-              className="w-2 h-2 rounded-full bg-red-400"
-            />
-            <span className="text-xs text-red-300">聆聽中</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ══ Camera preview ══ */}
       <AnimatePresence>
         {isCameraOn && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0 }}
+            initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
             className="absolute top-10 right-4 z-10 rounded-xl overflow-hidden"
             style={{ width: 80, height: 106, border: '1.5px solid rgba(255,255,255,0.1)' }}
           >
@@ -176,16 +128,14 @@ export default function RobotUI() {
         )}
       </AnimatePresence>
 
-      {/* ══ Speech bubble ══ */}
+      {/* ══════════ Last message bubble — bottom ══════════ */}
       <AnimatePresence>
         {(lastMsg || isThinking) && !isMenuOpen && (
           <motion.div
             key={lastMsg?.id ?? 'thinking'}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
+            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             className="absolute left-0 right-0 px-6 pointer-events-none z-10"
-            style={{ bottom: 100 }}
+            style={{ bottom: 20 }}
           >
             <div className="max-w-md mx-auto rounded-2xl bg-black/60 backdrop-blur border border-white/10 px-4 py-3">
               {isThinking ? (
@@ -203,65 +153,17 @@ export default function RobotUI() {
         )}
       </AnimatePresence>
 
-      {/* ══════════════════════════════════════════════════════
-          PERSISTENT MIC BUTTON — always visible at bottom
-          Directly calls recognition.start() in the gesture handler
-          so iOS Safari doesn't block it
-      ══════════════════════════════════════════════════════ */}
-      {!isMenuOpen && (
-        <div
-          className="absolute bottom-0 left-0 right-0 z-20 flex justify-center"
-          style={{ paddingBottom: 'env(safe-area-inset-bottom, 20px)', paddingTop: 12 }}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-            <motion.button
-              onClick={handleMicTap}
-              animate={{
-                scale: isListening ? 1.15 : 1,
-                backgroundColor: isListening
-                  ? 'rgba(239,68,68,0.3)'
-                  : wakeMode
-                  ? 'rgba(124,58,237,0.15)'
-                  : 'rgba(255,255,255,0.07)',
-                borderColor: isListening
-                  ? 'rgba(239,68,68,0.8)'
-                  : wakeMode
-                  ? 'rgba(124,58,237,0.5)'
-                  : 'rgba(255,255,255,0.15)',
-              }}
-              transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-              style={{
-                width: 64, height: 64, borderRadius: 9999,
-                border: '2px solid rgba(255,255,255,0.15)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 28, touchAction: 'manipulation', cursor: 'pointer',
-              }}
-            >
-              {isListening ? '🔴' : isSpeaking ? '🔊' : '🎤'}
-            </motion.button>
-            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 0.5 }}>
-              {isListening ? '再按停止' : wakeMode ? '說 yo bro 喚醒' : '按一下啟動'}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* ══ Pop-up menu (tap face to toggle) ══ */}
+      {/* ══════════ Pop-up menu — tap face ══════════ */}
       <AnimatePresence>
         {isMenuOpen && (
           <>
             <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="absolute inset-0 z-20"
               onClick={() => setIsMenuOpen(false)}
             />
-
             <motion.div
-              initial={{ y: '100%', opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: '100%', opacity: 0 }}
+              initial={{ y: '100%', opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '100%', opacity: 0 }}
               transition={{ type: 'spring', stiffness: 380, damping: 32 }}
               onClick={(e) => e.stopPropagation()}
               className="absolute bottom-0 left-0 right-0 z-30 rounded-t-3xl bg-[#121212] border-t border-white/8"
@@ -271,13 +173,10 @@ export default function RobotUI() {
                 <div className="w-9 h-1 rounded-full bg-white/15" />
               </div>
 
-              {/* Inline text input */}
               <AnimatePresence>
                 {showTextInput && (
                   <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
+                    initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
                     className="overflow-hidden px-4 pt-2"
                   >
                     <div className="flex gap-2 pb-3">
@@ -294,38 +193,40 @@ export default function RobotUI() {
                         disabled={!inputText.trim()}
                         className="rounded-xl bg-[#7c3aed] px-5 text-sm font-semibold text-white disabled:opacity-35"
                         style={{ touchAction: 'manipulation' }}
-                      >
-                        送出
-                      </button>
+                      >送出</button>
                     </div>
                   </motion.div>
                 )}
               </AnimatePresence>
 
-              {/* Menu grid — 4 buttons (mic moved to main screen) */}
-              <div className="grid grid-cols-4 gap-2 px-4 py-3">
+              <div className="grid grid-cols-3 gap-2 px-4 py-3">
                 <MenuBtn icon="⌨️" label="文字" active={showTextInput} activeColor="purple"
                   onClick={() => setShowTextInput((v) => !v)} />
                 <MenuBtn icon="📷" label={isCameraOn ? '關鏡頭' : '看看'} active={isCameraOn} activeColor="blue"
                   onClick={toggleCamera} />
                 <MenuBtn icon="💬" label="記錄"
                   onClick={() => { setShowHistory(true); setIsMenuOpen(false) }} />
-                <MenuBtn icon={noKeys ? '🔑' : '⚙️'} label={noKeys ? '設定Key' : '設定'}
-                  active={noKeys} activeColor="red"
-                  onClick={() => { setIsSettingsOpen(true); setIsMenuOpen(false) }} />
+              </div>
+
+              <div className="px-4 pb-3">
+                <button
+                  onClick={() => { setIsSettingsOpen(true); setIsMenuOpen(false) }}
+                  className="w-full text-xs text-white/30 py-2 rounded-lg"
+                  style={{ touchAction: 'manipulation' }}
+                >
+                  {noKeys ? '🔑 設定 API Key' : '⚙️ 設定'}
+                </button>
               </div>
             </motion.div>
           </>
         )}
       </AnimatePresence>
 
-      {/* ══ History drawer ══ */}
+      {/* ══════════ History drawer ══════════ */}
       <AnimatePresence>
         {showHistory && (
           <motion.div
-            initial={{ x: '100%' }}
-            animate={{ x: 0 }}
-            exit={{ x: '100%' }}
+            initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
             className="absolute inset-0 z-40 flex flex-col bg-[#0a0a0a]"
           >
@@ -336,7 +237,8 @@ export default function RobotUI() {
               <h2 className="text-base font-semibold text-white">對話記錄</h2>
               <button onClick={() => setShowHistory(false)}
                 className="w-10 h-10 flex items-center justify-center text-white/50 text-xl rounded-full bg-white/5"
-                style={{ touchAction: 'manipulation' }}>✕</button>
+                style={{ touchAction: 'manipulation' }}
+              >✕</button>
             </div>
             <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3">
               {messages.length === 0
@@ -353,7 +255,7 @@ export default function RobotUI() {
         )}
       </AnimatePresence>
 
-      {/* ══ Action confirm ══ */}
+      {/* ══════════ Action confirm ══════════ */}
       <AnimatePresence>
         {pendingAction && (
           <motion.div
@@ -377,14 +279,14 @@ export default function RobotUI() {
                   style={{ touchAction: 'manipulation' }}>取消</button>
                 <button onClick={confirmAction}
                   className="flex-1 rounded-xl bg-[#7c3aed] py-3.5 text-sm font-medium text-white"
-                  style={{ touchAction: 'manipulation' }}>確認執行</button>
+                  style={{ touchAction: 'manipulation' }}>確認</button>
               </div>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* ══ Key Manager ══ */}
+      {/* ══════════ Key Manager ══════════ */}
       <AnimatePresence>
         {isSettingsOpen && (
           <KeyManager keys={keys} onAdd={addKey} onRemove={removeKey} onReset={resetKey}
@@ -396,9 +298,12 @@ export default function RobotUI() {
 }
 
 function MenuBtn({ icon, label, active = false, activeColor = 'purple', onClick }: {
-  icon: string; label: string; active?: boolean; activeColor?: 'purple' | 'red' | 'blue'; onClick: () => void
+  icon: string; label: string; active?: boolean; activeColor?: 'purple' | 'blue'; onClick: () => void
 }) {
-  const colors = { purple: 'bg-[#7c3aed]/20 border-[#7c3aed]/50', red: 'bg-red-500/20 border-red-500/50', blue: 'bg-blue-500/20 border-blue-500/50' }
+  const colors = {
+    purple: 'bg-[#7c3aed]/20 border-[#7c3aed]/50',
+    blue:   'bg-blue-500/20 border-blue-500/50',
+  }
   return (
     <button onClick={onClick}
       className={`flex flex-col items-center gap-1.5 rounded-2xl py-3 border transition-colors ${active ? colors[activeColor] : 'bg-[#1e1e1e] border-white/5'}`}

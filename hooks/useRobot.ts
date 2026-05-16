@@ -1,22 +1,31 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Message, EmotionState, KeyEntry } from '@/types'
+import type { KeyEntry } from '@/types'
 import { getKeyRotator } from '@/lib/key-rotator'
 import { uuid } from '@/lib/uuid'
 import { getModelName } from '@/lib/model-config'
-import { EmotionEngine } from '@/lib/emotion-engine'
 import { executeAction, type ActionName } from '@/lib/phone-actions'
-import { buildSystemPrompt } from '@/lib/memory/retriever'
 import { useSpeech } from './useSpeech'
-import { useMemory } from './useMemory'
 
-const FALLBACK_SYSTEM_PROMPT = `你是一個剛誕生的AI智能體。
-你沒有固定名字，沒有預設個性。你只有一個核心：真誠陪伴眼前這個人。
-重要：用對方說話的語言回答。對方說中文就回中文，說英文就回英文。
-回答自然口語化，像朋友說話，不要說教，盡量簡短精準。`
+import {
+  getInnerState, updateInnerState, markUserInteraction,
+  incrementSession, moodToFaceEmotion,
+} from '@/lib/agent/inner-state'
+import type { InnerState } from '@/lib/agent/types'
+import { AgentLoop } from '@/lib/agent/loop'
+import { ContinuousListener } from '@/lib/speech/continuous'
+import { buildConversationPrompt } from '@/lib/memory/context'
+import { logEvent } from '@/lib/memory/store'
+import { runConsolidation, shouldRunConsolidation } from '@/lib/memory/consolidate'
 
-// Simple language detection — returns BCP-47 tag for TTS
+interface Message {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: number
+}
+
 function detectLang(text: string): string {
   const cjk = (text.match(/[一-鿿぀-ヿ]/g) ?? []).length
   const total = text.replace(/\s/g, '').length
@@ -25,101 +34,123 @@ function detectLang(text: string): string {
 }
 
 export function useRobot() {
-  const [emotion,       setEmotion]       = useState<EmotionState>('idle')
   const [messages,      setMessages]      = useState<Message[]>([])
   const [keys,          setKeys]          = useState<KeyEntry[]>([])
   const [isThinking,    setIsThinking]    = useState(false)
-  const [autoListen,    setAutoListen]    = useState(false)
-  const [wakeMode,      setWakeMode]      = useState(false)
   const [needsGesture,  setNeedsGesture]  = useState(false)
-  const [pendingAction, setPendingAction] = useState<{
-    name: ActionName; args: Record<string, string>; label: string
-  } | null>(null)
-  const [showHistory, setShowHistory] = useState(false)
+  const [innerState,    setInnerState]    = useState<InnerState>(() => getInnerState())
+  const [pendingAction, setPendingAction] = useState<{ name: ActionName; args: Record<string, string>; label: string } | null>(null)
+  const [showHistory,   setShowHistory]   = useState(false)
+  const [ambientCount,  setAmbientCount]  = useState(0)
 
   const rotator     = useRef(getKeyRotator())
-  const emotionEng  = useRef<EmotionEngine | null>(null)
-  const autoRef            = useRef(false)
-  const onWakeDetectedRef  = useRef<((extra: string) => void) | null>(null)
+  const agentLoop   = useRef<AgentLoop | null>(null)
+  const listener    = useRef<ContinuousListener | null>(null)
+  const busyRef     = useRef({ current: false })   // shared with AgentLoop
+  const lastBotAt   = useRef(0)
+  const activeUntil = useRef(0)                    // active conversation ends after this
 
-  const {
-    isListening, isSpeaking, mouthOpenness, isWakeActive,
-    startListening, stopListening, speak, stopSpeaking,
-    startWakeMode, stopWakeMode,
-  } = useSpeech()
-  const { storeConversation, extractAndSaveMemories, runPersonalityReflection } = useMemory()
+  const { isSpeaking, mouthOpenness, speak, stopSpeaking } = useSpeech()
 
+  // ─── Mount: bootstrap session + consolidation + agent loop ──────
   useEffect(() => {
-    emotionEng.current = new EmotionEngine((e) => setEmotion(e))
     setKeys(rotator.current.getAll())
+    incrementSession()
+    setInnerState(getInnerState())
 
-    // Auto-start wake detection — works immediately on PWA, needs one gesture on browser
-    const timer = setTimeout(() => {
-      setWakeMode(true)
-      startWakeMode(
-        (extra) => onWakeDetectedRef.current?.(extra),
-        () => {
-          // Needs gesture — show hint, user taps anywhere to activate
-          setNeedsGesture(true)
-          setWakeMode(false)
-        }
-      )
-    }, 800)
+    // Run memory consolidation in background if it's been a while
+    if (shouldRunConsolidation()) {
+      setTimeout(() => {
+        runConsolidation().catch(() => {})
+      }, 5_000)
+    }
+
+    // Start agent loop (proactive thinking)
+    agentLoop.current = new AgentLoop()
+    agentLoop.current.start({
+      onSpeak: (text) => {
+        // Proactive speech
+        if (!text.trim()) return
+        const lang = detectLang(text)
+        const msg: Message = { id: uuid(), role: 'assistant', content: text, timestamp: Date.now() }
+        setMessages((prev) => [...prev, msg])
+        lastBotAt.current = Date.now()
+        speak(text, lang)
+        logEvent({ timestamp: Date.now(), type: 'bot_speech', content: text }).catch(() => {})
+      },
+      onStateChange: () => setInnerState(getInnerState()),
+      busyRef: busyRef.current,
+    })
+
+    // Start continuous listener
+    listener.current = new ContinuousListener()
+    listener.current.start({
+      onSpeech: handleSpeechRef.current,
+      onAmbient: (t) => {
+        setAmbientCount((c) => c + 1)
+        logEvent({ timestamp: Date.now(), type: 'ambient', content: t }).catch(() => {})
+      },
+      onNeedsGesture: () => setNeedsGesture(true),
+      isBotSpeaking: () => isSpeakingRef.current,
+      isBotRecent: () => Date.now() - lastBotAt.current < 30_000,
+      isActive: () => Date.now() < activeUntil.current,
+    })
 
     return () => {
-      clearTimeout(timer)
-      emotionEng.current?.destroy()
+      agentLoop.current?.stop()
+      listener.current?.stop()
       rotator.current.destroy()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Keep ref in sync so callbacks always see latest value
-  useEffect(() => { autoRef.current = autoListen }, [autoListen])
+  // Mirror isSpeaking in a ref for the listener
+  const isSpeakingRef = useRef(false)
+  useEffect(() => { isSpeakingRef.current = isSpeaking }, [isSpeaking])
 
+  // ─── Key management ──────────────────────────────────────────────
   const refreshKeys = useCallback(() => setKeys(rotator.current.getAll()), [])
+  const addKey      = useCallback((v: string, l?: string) => { rotator.current.addKey(v, l); refreshKeys() }, [refreshKeys])
+  const removeKey   = useCallback((id: string) => { rotator.current.removeKey(id); refreshKeys() }, [refreshKeys])
+  const resetKey    = useCallback((id: string) => { rotator.current.resetKey(id); refreshKeys() }, [refreshKeys])
 
-  const addKey    = useCallback((v: string, l?: string) => { rotator.current.addKey(v, l); refreshKeys() }, [refreshKeys])
-  const removeKey = useCallback((id: string) => { rotator.current.removeKey(id); refreshKeys() }, [refreshKeys])
-  const resetKey  = useCallback((id: string) => { rotator.current.resetKey(id); refreshKeys() }, [refreshKeys])
-
-  // ─── startListen as a stable ref so sendMessage can call it ───────
-  const startListenRef = useRef<((cb: (t: string) => void) => void) | null>(null)
-  useEffect(() => { startListenRef.current = startListening }, [startListening])
-
+  // ─── Conversation flow ───────────────────────────────────────────
   const sendMessage = useCallback(async (text: string, imageBase64?: string) => {
     const lang = detectLang(text)
     const key = rotator.current.getNextKey()
+    busyRef.current.current = true
+    activeUntil.current = Date.now() + 60_000
 
     if (!key) {
       const earliest = rotator.current.getEarliestReset()
       const waitSec = earliest ? Math.ceil((earliest - Date.now()) / 1000) : 60
       const errMsg = keys.length === 0
-        ? '還沒有設定 API Key！點一下畫面選 ⚙️ 設定'
-        : `所有 Key 都在冷卻，約 ${waitSec} 秒後恢復`
+        ? '還沒有設定 API Key 噢'
+        : `Key 都在冷卻，等 ${waitSec} 秒`
       setMessages((prev) => [
         ...prev,
         { id: uuid(), role: 'user',      content: text,   timestamp: Date.now() },
-        { id: uuid(), role: 'assistant', content: errMsg, timestamp: Date.now(), emotion: 'sad' },
+        { id: uuid(), role: 'assistant', content: errMsg, timestamp: Date.now() },
       ])
-      emotionEng.current?.setEmotion('sad')
       speak(errMsg, lang)
+      busyRef.current.current = false
       return
     }
 
     const userMsg: Message = { id: uuid(), role: 'user', content: text, timestamp: Date.now() }
     setMessages((prev) => [...prev, userMsg])
-    emotionEng.current?.setEmotion('thinking')
+    markUserInteraction()
     setIsThinking(true)
+    logEvent({ timestamp: Date.now(), type: 'user_speech', content: text }).catch(() => {})
 
+    // Build history of recent exchanges
     const history = messages.slice(-10).map((m) => ({
       role: (m.role === 'user' ? 'user' : 'model') as 'user' | 'model',
       parts: [{ text: m.content }],
     }))
 
     try {
-      let systemPrompt = FALLBACK_SYSTEM_PROMPT
-      try { systemPrompt = await buildSystemPrompt(text) } catch { /* IndexedDB unavailable */ }
+      const systemPrompt = await buildConversationPrompt()
 
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -148,16 +179,18 @@ export function useRobot() {
       const action = data.action as { name: ActionName; args: Record<string, string> } | undefined
 
       const botLang = detectLang(botText)
-      const botEmotion: EmotionState = emotionEng.current?.analyze(botText) ?? 'idle'
-      emotionEng.current?.setEmotion(botEmotion)
 
       const assistantMsg: Message = {
         id: uuid(), role: 'assistant',
-        content: botText || '（無回應）',
-        timestamp: Date.now(), emotion: botEmotion,
+        content: botText || '(無回應)',
+        timestamp: Date.now(),
       }
       setMessages((prev) => [...prev, assistantMsg])
       setIsThinking(false)
+      lastBotAt.current = Date.now()
+      activeUntil.current = Date.now() + 90_000
+
+      logEvent({ timestamp: Date.now(), type: 'bot_speech', content: botText }).catch(() => {})
 
       if (action) {
         const CONFIRM: ActionName[] = ['compose_line', 'compose_sms', 'call']
@@ -166,148 +199,77 @@ export function useRobot() {
           speak(botText || '要我幫你執行嗎？', botLang)
         } else {
           executeAction(action.name, action.args)
-          speak(botText || '好，幫你開啟了', botLang)
+          speak(botText || '好，幫你開了', botLang)
         }
       } else if (botText) {
-        emotionEng.current?.setEmotion('speaking')
-        speak(botText, botLang, () => {
-          emotionEng.current?.setEmotion('idle')
-          if (autoRef.current) {
-            setTimeout(() => {
-              if (!autoRef.current) return
-              emotionEng.current?.setEmotion('listening')
-              // Resume wake-word detection after speaking
-              startWakeMode((extra) => {
-                stopWakeMode()
-                if (extra.trim()) {
-                  sendMessageRef.current?.(extra)
-                } else {
-                  startListenRef.current?.((t) => {
-                    if (t) sendMessageRef.current?.(t)
-                  })
-                }
-              })
-              // Also start a regular listen session for immediate input
-              startListenRef.current?.((t) => {
-                if (t && !t.toLowerCase().includes('yo bro')) {
-                  sendMessageRef.current?.(t)
-                }
-              })
-            }, 400)
-          }
-        })
-      } else {
-        emotionEng.current?.setEmotion('idle')
+        speak(botText, botLang)
       }
-
-      storeConversation(text, botText, botEmotion).catch(() => {})
-      extractAndSaveMemories(text, botText).catch(() => {})
-      const rKey = rotator.current.getNextKey()
-      if (rKey && botText) runPersonalityReflection(text, botText, rKey.value).catch(() => {})
     } catch (err) {
       setIsThinking(false)
       const errText = err instanceof Error ? err.message : String(err)
       const errMsg = `出了點問題：${errText}`
-      setMessages((prev) => [...prev, { id: uuid(), role: 'assistant', content: errMsg, timestamp: Date.now(), emotion: 'sad' }])
-      emotionEng.current?.setEmotion('sad')
+      setMessages((prev) => [...prev, { id: uuid(), role: 'assistant', content: errMsg, timestamp: Date.now() }])
       speak(errMsg, 'zh-TW')
       refreshKeys()
+    } finally {
+      busyRef.current.current = false
     }
-  }, [messages, keys, refreshKeys, speak, storeConversation, extractAndSaveMemories, runPersonalityReflection])
+  }, [messages, keys, refreshKeys, speak])
 
-  // Keep a stable ref so the auto-listen closure can call sendMessage
+  // Stable ref so listener can call latest sendMessage
   const sendMessageRef = useRef(sendMessage)
   useEffect(() => { sendMessageRef.current = sendMessage }, [sendMessage])
 
+  const handleSpeechRef = useRef((text: string) => {
+    sendMessageRef.current(text)
+  })
+
+  // ─── Activation gesture (one-time) ───────────────────────────────
+  const activateByGesture = useCallback(() => {
+    setNeedsGesture(false)
+    listener.current?.start({
+      onSpeech: (text) => handleSpeechRef.current(text),
+      onAmbient: (t) => {
+        setAmbientCount((c) => c + 1)
+        logEvent({ timestamp: Date.now(), type: 'ambient', content: t }).catch(() => {})
+      },
+      onNeedsGesture: () => setNeedsGesture(true),
+      isBotSpeaking: () => isSpeakingRef.current,
+      isBotRecent: () => Date.now() - lastBotAt.current < 30_000,
+      isActive: () => Date.now() < activeUntil.current,
+    })
+  }, [])
+
+  // ─── Action confirm ──────────────────────────────────────────────
   const confirmAction = useCallback(() => {
     if (!pendingAction) return
     executeAction(pendingAction.name, pendingAction.args)
     setPendingAction(null)
   }, [pendingAction])
 
-  const cancelAction = useCallback(() => { setPendingAction(null); speak('好，取消了', 'zh-TW') }, [speak])
+  const cancelAction = useCallback(() => {
+    setPendingAction(null)
+    speak('好，取消', 'zh-TW')
+  }, [speak])
 
-  const onWakeDetected = useCallback((extra: string) => {
-    stopWakeMode()
-    emotionEng.current?.setEmotion('happy')
-
-    // Immediately respond with voice acknowledgement
-    speak('yo bro 我在', 'zh-TW', () => {
-      emotionEng.current?.setEmotion('listening')
-      if (extra.trim()) {
-        // User said "yo bro [question]" all in one
-        sendMessageRef.current?.(extra)
-      } else {
-        // Start listening for the actual question
-        setAutoListen(true)
-        startListenRef.current?.((transcript) => {
-          if (transcript.trim()) sendMessageRef.current?.(transcript)
-        })
-      }
-    })
-  }, [stopWakeMode, speak, startListening])
-
-  // Keep ref current so the auto-start closure can call it
-  useEffect(() => { onWakeDetectedRef.current = onWakeDetected }, [onWakeDetected])
-
-  // ─── Mic button ──────────────────────────────────────────────────
-  const handleMicPress = useCallback(() => {
-    // If in wake mode → exit everything
-    if (wakeMode) {
-      stopWakeMode()
-      setWakeMode(false)
-      setAutoListen(false)
-      stopListening()
-      emotionEng.current?.setEmotion('idle')
-      return
-    }
-
-    // If actively listening → stop auto mode
-    if (isListening) {
-      stopListening()
-      setAutoListen(false)
-      emotionEng.current?.setEmotion('idle')
-      return
-    }
-
-    if (isSpeaking) stopSpeaking()
-
-    // First tap → enter wake-word detection mode
-    setWakeMode(true)
-    setAutoListen(true)
-    emotionEng.current?.setEmotion('listening')
-
-    // Start wake detection loop
-    startWakeMode(onWakeDetected)
-
-    // Also do immediate active listen so user can start talking right away
-    startListening((transcript) => {
-      if (transcript.trim()) {
-        if (!transcript.toLowerCase().includes('yo bro')) {
-          sendMessageRef.current?.(transcript)
-        }
-        // if it contains wake word, the wake loop handles it
-      }
-    })
-  }, [wakeMode, isListening, isSpeaking, startWakeMode, startListening, stopListening, stopSpeaking, stopWakeMode, onWakeDetected])
-
-  const handleMicRelease = useCallback(() => {}, [])
-
-  // Called when user taps the screen during "needs gesture" state
-  const activateByGesture = useCallback(() => {
-    setNeedsGesture(false)
-    setWakeMode(true)
-    setAutoListen(true)
-    startWakeMode(
-      (extra) => onWakeDetectedRef.current?.(extra),
-      () => { setNeedsGesture(true); setWakeMode(false) }
-    )
-  }, [startWakeMode])
+  // ─── Derived face emotion from inner state ──────────────────────
+  const faceEmotion = isSpeaking
+    ? 'speaking'
+    : isThinking
+    ? 'thinking'
+    : moodToFaceEmotion(innerState.mood)
 
   return {
-    emotion, messages, keys, isThinking, isListening, isSpeaking,
-    mouthOpenness, showHistory, pendingAction, autoListen, wakeMode, needsGesture, isWakeActive,
-    setShowHistory, sendMessage, addKey, removeKey, resetKey,
-    handleMicPress, handleMicRelease, confirmAction, cancelAction, activateByGesture,
+    // state
+    emotion: faceEmotion as 'idle' | 'happy' | 'sad' | 'thinking' | 'speaking' | 'sleeping' | 'surprised' | 'listening',
+    messages, keys, isThinking, isSpeaking,
+    mouthOpenness, needsGesture, innerState, ambientCount,
+    pendingAction, showHistory,
+    // setters
+    setShowHistory,
+    // actions
+    sendMessage, addKey, removeKey, resetKey,
+    activateByGesture, confirmAction, cancelAction,
+    stopSpeaking,
   }
 }
